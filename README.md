@@ -8,7 +8,7 @@ The project focuses on reliability challenges commonly found in payment systems,
 
 ---
 
-## Planned Features
+## Features
 
 Features are ticked off in the [Roadmap](#roadmap) as they are implemented.
 
@@ -819,25 +819,25 @@ payment-order-processing-service/
 
 ### Core
 
-* [ ] Database schema and migrations
-* [ ] `orders` table
-* [ ] `payments` table
-* [ ] `idempotency_keys` table
-* [ ] `outbox_events` table
-* [ ] `webhook_events` table
+* [X] Database schema and migrations
+* [X] `orders` table
+* [X] `payments` table
+* [X] `idempotency_keys` table
+* [X] `outbox_events` table
+* [X] `webhook_events` table
 
 ### Order & Idempotency
 
-* [ ] `POST /orders`
-* [ ] Idempotency-Key validation
-* [ ] Request payload hashing
-* [ ] Idempotency response replay
+* [X] `POST /orders`
+* [X] Idempotency-Key validation
+* [X] Request payload hashing
+* [X] Idempotency response replay
 * [ ] Concurrent request protection
-* [ ] PostgreSQL transaction
+* [X] PostgreSQL transaction
 
 ### Outbox
 
-* [ ] Outbox event creation
+* [X] Outbox event creation
 * [ ] Outbox relay
 * [ ] At-least-once event publishing
 * [ ] Failed event retry
