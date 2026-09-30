@@ -932,6 +932,7 @@ Key concepts include:
 **Yashvant Yadav**
 
 Senior Backend Engineer
-
++91-9601062671
+yashvanty@gmail.com
 **Node.js | TypeScript | AWS | GraphQL | Microservices | Serverless**
 
