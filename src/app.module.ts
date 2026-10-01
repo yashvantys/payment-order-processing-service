@@ -4,6 +4,9 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { OrdersModule } from './orders/orders.module.js';
+import { OutboxModule } from './outbox/outbox.module.js';
+import { QueueModule } from './queue/queue.module.js';
+import { PaymentsModule } from './payments/payments.module.js';
 
 @Module({
   imports: [
@@ -11,7 +14,10 @@ import { OrdersModule } from './orders/orders.module.js';
       isGlobal: true,
     }),
     PrismaModule, 
-    OrdersModule
+    OrdersModule, 
+    OutboxModule, 
+    QueueModule, 
+    PaymentsModule
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -5,12 +5,12 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci
-
+# Copy Prisma files before npm ci because
+# package.json runs "npx prisma generate" in postinstall
 COPY prisma ./prisma
 COPY prisma.config.ts ./
 
-RUN npx prisma generate
+RUN npm ci
 
 COPY tsconfig*.json ./
 COPY nest-cli.json ./
@@ -28,13 +28,15 @@ ENV NODE_ENV=production
 
 COPY package*.json ./
 
+# Prisma schema/config must exist before npm ci
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/prisma.config.ts ./
 
 EXPOSE 3000
 
