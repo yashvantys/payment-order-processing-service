@@ -838,8 +838,8 @@ payment-order-processing-service/
 ### Outbox
 
 * [X] Outbox event creation
-* [ ] Outbox relay
-* [ ] At-least-once event publishing
+* [X] Outbox relay
+* [X] At-least-once event publishing
 * [ ] Failed event retry
 
 ### Payment Processing
@@ -872,7 +872,7 @@ payment-order-processing-service/
 * [ ] Unit tests
 * [ ] Integration tests
 * [ ] E2E tests
-* [ ] Docker Compose
+* [X] Docker Compose
 * [ ] GitHub Actions CI
 * [ ] Swagger/OpenAPI
 
