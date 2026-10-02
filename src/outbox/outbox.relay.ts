@@ -28,6 +28,15 @@ export class OutboxRelay {
                     },
                     {
                         jobId: event.id,
+                        // Retry configuration
+                        attempts: 3,
+                        backoff: {
+                            type: 'exponential',
+                            delay: 1000,
+                        },
+
+                        removeOnComplete: true,
+                        removeOnFail: false,
                     },
                 );
                 await this.prisma.outboxEvent.update({

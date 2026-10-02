@@ -9,9 +9,15 @@ import { BullModule } from '@nestjs/bullmq';
                 port: Number(process.env.REDIS_PORT ?? 6379),
             },
         }),
-        BullModule.registerQueue({
-            name: 'payment-events',
-        }),
+
+        BullModule.registerQueue(
+            {
+                name: 'payment-events',
+            },
+            {
+                name: 'payment-dlq',
+            },
+        ),
     ],
     exports: [BullModule],
 })

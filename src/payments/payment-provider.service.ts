@@ -7,9 +7,10 @@ export class PaymentProviderService {
     amount: bigint;
     currency: string;
   }) {
-    // Simulate an external payment provider.
     await new Promise((resolve) => setTimeout(resolve, 500));
-
+    if (input.amount === BigInt(999999)) {
+      throw new Error('Mock payment provider unavailable');
+    }
     return {
       success: true,
       provider: 'mock',
