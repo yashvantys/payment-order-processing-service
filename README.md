@@ -829,7 +829,7 @@ payment-order-processing-service/
 ### Order & Idempotency
 
 * [X] `POST /orders`
-* [X] Idempotency-Key validation
+* [] Idempotency-Key validation
 * [X] Request payload hashing
 * [X] Idempotency response replay
 * [ ] Concurrent request protection
@@ -840,17 +840,17 @@ payment-order-processing-service/
 * [X] Outbox event creation
 * [X] Outbox relay
 * [X] At-least-once event publishing
-* [ ] Failed event retry
+* [X] Failed event retry
 
 ### Payment Processing
 
 * [ ] Payment gateway interface
-* [ ] Mock payment gateway
-* [ ] Payment worker
+* [X] Mock payment gateway
+* [X] Payment worker
 * [ ] Payment state machine
 * [ ] Gateway timeout handling
-* [ ] Exponential backoff
-* [ ] DLQ handling
+* [X] Exponential backoff
+* [X] DLQ handling
 
 ### Webhooks
 
