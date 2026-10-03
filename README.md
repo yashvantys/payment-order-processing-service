@@ -844,24 +844,26 @@ payment-order-processing-service/
 
 ### Payment Processing
 
-* [ ] Payment gateway interface
+* [X] Payment gateway interface
 * [X] Mock payment gateway
 * [X] Payment worker
 * [ ] Payment state machine
-* [ ] Gateway timeout handling
+* [X] Gateway timeout handling
 * [X] Exponential backoff
 * [X] DLQ handling
 
 ### Webhooks
 
-* [ ] Webhook endpoint
-* [ ] HMAC signature verification
-* [ ] Event ID deduplication
-* [ ] Payment status update
-* [ ] Completion outbox events
+* [X] Webhook endpoint
+* [X] HMAC signature verification
+* [X] Event ID deduplication
+* [X] Payment status update
+* [X] Completion outbox events
 
 ### Reliability
 
+* [X] Manual reconciliation endpoint and service
+* [X] Duplicate webhook handling / idempotent payment consumer
 * [ ] Reconciliation job
 * [ ] Duplicate message handling
 * [ ] Concurrent processing protection
