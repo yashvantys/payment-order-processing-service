@@ -58,12 +58,7 @@ export class PaymentsProcessor extends WorkerHost {
             data: {
                 status: 'PROCESSING',
             },
-        });
-        const result = await this.paymentProvider.charge({
-            paymentId,
-            amount: BigInt(amount),
-            currency,
-        });
+        });       
         try {
             const result = await this.paymentProvider.charge({
                 paymentId,
