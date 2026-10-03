@@ -829,7 +829,7 @@ payment-order-processing-service/
 ### Order & Idempotency
 
 * [X] `POST /orders`
-* [] Idempotency-Key validation
+* [ ] Idempotency-Key validation
 * [X] Request payload hashing
 * [X] Idempotency response replay
 * [ ] Concurrent request protection

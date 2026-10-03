@@ -37,6 +37,7 @@ services:
       DATABASE_URL: postgresql://postgres:admin@postgres:5432/payment_order_db
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      WEBHOOK_SECRET: super-secret-webhook-key
     ports:
       - "3000:3000"
     depends_on:

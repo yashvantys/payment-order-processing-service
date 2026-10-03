@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Processor, WorkerHost, InjectQueue, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job, Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { PaymentProviderService } from './payment-provider.service.js';
+import {
+    PaymentProviderService,
+    PaymentProviderTimeoutError,
+} from './payment-provider.service.js';
 
 interface PaymentRequestedEvent {
     eventId: string;
@@ -61,63 +64,103 @@ export class PaymentsProcessor extends WorkerHost {
             amount: BigInt(amount),
             currency,
         });
-        await this.prisma.$transaction(async (tx) => {
-            if (result.success) {
-                await tx.payment.update({
-                    where: { id: paymentId },
-                    data: {
-                        status: 'SUCCESS',
-                        provider: result.provider,
-                        providerPaymentId: result.providerPaymentId,
-                    },
-                });
-                await tx.order.update({
-                    where: { id: orderId },
-                    data: {
-                        status: 'PAID',
-                    },
-                });
-                await tx.outboxEvent.create({
-                    data: {
-                        aggregateType: 'PAYMENT',
-                        aggregateId: paymentId,
-                        eventType: 'PaymentCompleted',
-                        payload: {
+        try {
+            const result = await this.paymentProvider.charge({
+                paymentId,
+                amount: BigInt(amount),
+                currency,
+            });
+
+            await this.prisma.$transaction(async (tx) => {
+                if (result.success) {
+                    await tx.payment.update({
+                        where: { id: paymentId },
+                        data: {
+                            status: 'SUCCESS',
+                            provider: result.provider,
+                            providerPaymentId: result.providerPaymentId,
+                        },
+                    });
+
+                    await tx.order.update({
+                        where: { id: orderId },
+                        data: {
+                            status: 'PAID',
+                        },
+                    });
+
+                    await tx.outboxEvent.create({
+                        data: {
+                            aggregateType: 'PAYMENT',
+                            aggregateId: paymentId,
                             eventType: 'PaymentCompleted',
-                            paymentId,
-                            orderId,
+                            payload: {
+                                eventType: 'PaymentCompleted',
+                                paymentId,
+                                orderId,
+                            },
                         },
-                    },
-                });
-            } else {
-                await tx.payment.update({
+                    });
+                } else {
+                    await tx.payment.update({
+                        where: { id: paymentId },
+                        data: {
+                            status: 'FAILED',
+                            failureReason:
+                                'Payment provider rejected the payment',
+                        },
+                    });
+
+                    await tx.order.update({
+                        where: { id: orderId },
+                        data: {
+                            status: 'PAYMENT_FAILED',
+                        },
+                    });
+
+                    await tx.outboxEvent.create({
+                        data: {
+                            aggregateType: 'PAYMENT',
+                            aggregateId: paymentId,
+                            eventType: 'PaymentFailed',
+                            payload: {
+                                eventType: 'PaymentFailed',
+                                paymentId,
+                                orderId,
+                            },
+                        },
+                    });
+                }
+            });
+
+            this.logger.log(
+                `Payment ${paymentId} processed successfully`,
+            );
+        } catch (error) {
+            if (error instanceof PaymentProviderTimeoutError) {
+                await this.prisma.payment.update({
                     where: { id: paymentId },
                     data: {
-                        status: 'FAILED',
-                        failureReason: 'Payment provider rejected the payment',
+                        status: 'PROCESSING',
+                        provider: 'mock',
+                        providerPaymentId: error.providerPaymentId,
                     },
                 });
-                await tx.order.update({
-                    where: { id: orderId },
-                    data: {
-                        status: 'PAYMENT_FAILED',
-                    },
-                });
-                await tx.outboxEvent.create({
-                    data: {
-                        aggregateType: 'PAYMENT',
-                        aggregateId: paymentId,
-                        eventType: 'PaymentFailed',
-                        payload: {
-                            eventType: 'PaymentFailed',
-                            paymentId,
-                            orderId,
-                        },
-                    },
-                });
+
+                this.logger.warn(
+                    `Payment ${paymentId} remains PROCESSING. ` +
+                    `Provider payment ID: ${error.providerPaymentId}`,
+                );
+
+                // Important:
+                // Do not throw. Reconciliation will resolve it.
+                return;
             }
-        });
-        this.logger.log(`Payment ${paymentId} processed successfully`);
+
+            // Normal provider errors still go through
+            // BullMQ retry/DLQ handling.
+            throw error;
+        }
     }
 
     @OnWorkerEvent('failed')
@@ -125,18 +168,66 @@ export class PaymentsProcessor extends WorkerHost {
         if (!job) {
             return;
         }
+
         const maxAttempts = job.opts.attempts ?? 1;
+
         this.logger.error(
             `Payment job ${job.id} failed. ` +
             `attempt=${job.attemptsMade}, ` +
             `maxAttempts=${maxAttempts}, ` +
             `error=${error.message}`,
         );
-        // Only move the job to DLQ after all retries are exhausted.
+
+        // Retries are still available.
         if (job.attemptsMade < maxAttempts) {
             return;
         }
 
+        const { paymentId, orderId } = job.data.payload;
+
+        // All retries exhausted.
+        // Move the payment/order to their terminal failure states.
+        await this.prisma.$transaction(async (tx) => {
+            const payment = await tx.payment.findUnique({
+                where: { id: paymentId },
+            });
+
+            // Protect against duplicate failed events.
+            if (!payment || payment.status === 'FAILED') {
+                return;
+            }
+
+            await tx.payment.update({
+                where: { id: paymentId },
+                data: {
+                    status: 'FAILED',
+                    failureReason: error.message,
+                },
+            });
+
+            await tx.order.update({
+                where: { id: orderId },
+                data: {
+                    status: 'PAYMENT_FAILED',
+                },
+            });
+
+            await tx.outboxEvent.create({
+                data: {
+                    aggregateType: 'PAYMENT',
+                    aggregateId: paymentId,
+                    eventType: 'PaymentFailed',
+                    payload: {
+                        eventType: 'PaymentFailed',
+                        paymentId,
+                        orderId,
+                        reason: error.message,
+                    },
+                },
+            });
+        });
+
+        // Move the exhausted job to DLQ.
         await this.paymentDlq.add(
             'PaymentProcessingFailed',
             {

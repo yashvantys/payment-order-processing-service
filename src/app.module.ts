@@ -7,6 +7,7 @@ import { OrdersModule } from './orders/orders.module.js';
 import { OutboxModule } from './outbox/outbox.module.js';
 import { QueueModule } from './queue/queue.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
+import { WebhookModule } from './webhook/webhook.module.js';
 
 @Module({
   imports: [
@@ -17,7 +18,8 @@ import { PaymentsModule } from './payments/payments.module.js';
     OrdersModule, 
     OutboxModule, 
     QueueModule, 
-    PaymentsModule
+    PaymentsModule, 
+    WebhookModule
   ],
   controllers: [AppController],
   providers: [AppService],
