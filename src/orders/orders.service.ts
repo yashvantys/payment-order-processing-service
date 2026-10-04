@@ -5,6 +5,7 @@ import {
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class OrdersService {
@@ -47,7 +48,7 @@ export class OrdersService {
                 const orderId = crypto.randomUUID();
                 const paymentId = crypto.randomUUID();
 
-                const orderNumber = `ORD-${Date.now()}`;
+                const orderNumber = `ORD-${randomUUID()}`;
 
                 // 5. Create idempotency record
                 await tx.idempotencyKey.create({

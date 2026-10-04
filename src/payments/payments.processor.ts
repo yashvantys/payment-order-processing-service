@@ -33,6 +33,9 @@ export class PaymentsProcessor extends WorkerHost {
         super();
     }
     async process(job: Job<PaymentRequestedEvent>) {
+        console.log('>>> PAYMENT WORKER STARTED');
+        console.log('>>> Job ID:', job.id);
+        console.log('>>> Job data:', job.data);
         this.logger.log(
             `Job ${job.id}: attemptsMade=${job.attemptsMade}, configuredAttempts=${job.opts.attempts ?? 1}`,
         );
@@ -58,8 +61,8 @@ export class PaymentsProcessor extends WorkerHost {
             data: {
                 status: 'PROCESSING',
             },
-        });       
-        try {
+        });
+        try {            
             const result = await this.paymentProvider.charge({
                 paymentId,
                 amount: BigInt(amount),

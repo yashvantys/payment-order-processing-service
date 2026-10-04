@@ -67,14 +67,12 @@ export class WebhookService {
                 this.logger.log(
                     `Duplicate webhook ignored: ${payload.providerEventId}`,
                 );
-
                 return {
                     received: true,
                     duplicate: true,
                     eventId: payload.providerEventId,
                 };
             }
-
             // Store webhook event first.
             await tx.webhookEvent.create({
                 data: {
@@ -103,15 +101,12 @@ export class WebhookService {
                 throw new Error(
                     `Payment ${payload.paymentId} not found`,
                 );
-            }
-
-            // IMPORTANT:
+            }          
             // Protect terminal payment states BEFORE applying webhook changes.
             if (payment.status === 'SUCCESS' || payment.status === 'FAILED') {
                 this.logger.warn(
                     `Ignoring webhook ${payload.providerEventId}: payment ${payment.id} is already ${payment.status}`,
                 );
-
                 await tx.webhookEvent.update({
                     where: {
                         provider_providerEventId: {

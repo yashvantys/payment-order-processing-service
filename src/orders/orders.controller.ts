@@ -4,6 +4,7 @@ import {
     Headers,
     Post,
     HttpCode,
+    BadRequestException,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
@@ -18,6 +19,11 @@ export class OrdersController {
         @Headers('idempotency-key') idempotencyKey: string,
         @Body() dto: CreateOrderDto,
     ) {
+        if (!idempotencyKey?.trim()) {
+            throw new BadRequestException(
+                'Idempotency-Key header is required',
+            );
+        }
         return this.ordersService.createOrder(idempotencyKey, dto);
     }
 }
