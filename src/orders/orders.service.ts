@@ -6,6 +6,8 @@ import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
+
 
 @Injectable()
 export class OrdersService {
@@ -21,7 +23,6 @@ export class OrdersService {
 
         try {
             return await this.prisma.$transaction(async (tx) => {
-                // 2. Check whether this idempotency key already exists
                 const existingKey = await tx.idempotencyKey.findUnique({
                     where: {
                         userId_key: {
@@ -31,26 +32,20 @@ export class OrdersService {
                     },
                 });
 
-                // 3. Handle retry with the same key
                 if (existingKey) {
-                    // Same key + different request = reject
                     if (existingKey.requestHash !== requestHash) {
                         throw new UnprocessableEntityException(
                             'Idempotency-Key was already used with a different request',
                         );
                     }
 
-                    // Same key + same request = return original response
                     return existingKey.responseBody;
                 }
 
-                // 4. Generate IDs
-                const orderId = crypto.randomUUID();
-                const paymentId = crypto.randomUUID();
-
+                const orderId = randomUUID();
+                const paymentId = randomUUID();
                 const orderNumber = `ORD-${randomUUID()}`;
 
-                // 5. Create idempotency record
                 await tx.idempotencyKey.create({
                     data: {
                         userId: dto.customerId,
@@ -65,7 +60,6 @@ export class OrdersService {
                     },
                 });
 
-                // 6. Create Order
                 await tx.order.create({
                     data: {
                         id: orderId,
@@ -77,7 +71,6 @@ export class OrdersService {
                     },
                 });
 
-                // 7. Create Payment
                 await tx.payment.create({
                     data: {
                         id: paymentId,
@@ -89,7 +82,6 @@ export class OrdersService {
                     },
                 });
 
-                // 8. Create Outbox Event
                 await tx.outboxEvent.create({
                     data: {
                         aggregateType: 'ORDER',
@@ -116,7 +108,38 @@ export class OrdersService {
                 throw error;
             }
 
+            if (this.isUniqueConstraintError(error)) {
+                const existingKey =
+                    await this.prisma.idempotencyKey.findUnique({
+                        where: {
+                            userId_key: {
+                                userId: dto.customerId,
+                                key: idempotencyKey,
+                            },
+                        },
+                    });
+
+                if (!existingKey) {
+                    throw error;
+                }
+
+                if (existingKey.requestHash !== requestHash) {
+                    throw new UnprocessableEntityException(
+                        'Idempotency-Key was already used with a different request',
+                    );
+                }
+
+                return existingKey.responseBody;
+            }
+
             throw error;
         }
+    }
+
+    private isUniqueConstraintError(error: unknown): boolean {
+        return (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002'
+        );
     }
 }
