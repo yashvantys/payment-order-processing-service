@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PaymentProviderService } from './payment-provider.service.js';
 
@@ -106,5 +106,19 @@ export class ReconciliationService {
             reconciled: false,
             reason: 'Provider status unknown',
         };
+    }
+
+    async getPayment(paymentId: string) {
+        const payment = await this.prisma.payment.findUnique({
+            where: {
+                id: paymentId,
+            },
+        });
+
+        if (!payment) {
+            throw new NotFoundException('Payment not found');
+        }
+
+        return payment;
     }
 }

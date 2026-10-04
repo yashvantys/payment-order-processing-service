@@ -1,4 +1,4 @@
-import { Controller, Post } from '@nestjs/common';
+import { Controller, Post, Get, Param } from '@nestjs/common';
 import { ReconciliationService } from './reconciliation.service.js';
 @Controller('payments')
 export class PaymentsController {
@@ -7,5 +7,10 @@ export class PaymentsController {
     @Post('reconcile')
     async reconcile() {
         return this.reconciliationService.reconcileProcessingPayments();
+    }
+
+    @Get(':id')
+    async getPayment(@Param('id') id: string) {
+        return this.reconciliationService.getPayment(id);
     }
 }

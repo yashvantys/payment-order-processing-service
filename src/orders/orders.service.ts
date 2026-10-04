@@ -1,5 +1,6 @@
 import {
     Injectable,
+    NotFoundException,
     UnprocessableEntityException,
 } from '@nestjs/common';
 import { createHash } from 'crypto';
@@ -141,5 +142,21 @@ export class OrdersService {
             error instanceof Prisma.PrismaClientKnownRequestError &&
             error.code === 'P2002'
         );
+    }
+
+    async getOrder(orderId: string) {
+        const order = await this.prisma.order.findUnique({
+            where: {
+                id: orderId,
+            },
+            include: {
+                payment: true,
+            },
+        });
+
+        if (!order) {
+            throw new NotFoundException('Order not found');
+        }
+        return order;
     }
 }

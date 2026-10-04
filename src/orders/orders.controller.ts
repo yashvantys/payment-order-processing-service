@@ -5,6 +5,8 @@ import {
     Post,
     HttpCode,
     BadRequestException,
+    Get,
+    Param,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
@@ -25,5 +27,9 @@ export class OrdersController {
             );
         }
         return this.ordersService.createOrder(idempotencyKey, dto);
+    }
+    @Get(':id')
+    async getOrder(@Param('id') id: string) {
+        return this.ordersService.getOrder(id);
     }
 }
