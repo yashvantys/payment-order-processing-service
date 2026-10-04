@@ -751,46 +751,28 @@ payment-order-processing-service/
 │
 ├── src/
 │   ├── orders/
+│   │   ├── dto/
+│   │   │   └── create-order.dto.ts
 │   │   ├── orders.controller.ts
-│   │   ├── orders.service.ts
-│   │   ├── orders.repository.ts
-│   │   └── dto/
+│   │   └── orders.service.ts
 │   │
 │   ├── payments/
-│   │   ├── payments.service.ts
-│   │   ├── payment.gateway.ts
-│   │   ├── payment-state-machine.ts
-│   │   └── dto/
-│   │
-│   ├── idempotency/
-│   │   ├── idempotency.service.ts
-│   │   └── idempotency.repository.ts
+│   │   ├── payments.controller.ts
+│   │   ├── payments.processor.ts
+│   │   └── payment-provider.service.ts
 │   │
 │   ├── outbox/
-│   │   ├── outbox.service.ts
 │   │   └── outbox.relay.ts
-│   │
-│   ├── workers/
-│   │   └── payment.worker.ts
 │   │
 │   ├── webhooks/
 │   │   ├── webhook.controller.ts
-│   │   ├── webhook.service.ts
-│   │   └── hmac.guard.ts
-│   │
-│   ├── auth/
-│   │   ├── auth.service.ts
-│   │   ├── jwt.strategy.ts
-│   │   └── guards/
+│   │   └── webhook.service.ts
 │   │
 │   ├── reconciliation/
 │   │   └── reconciliation.service.ts
 │   │
-│   ├── common/
-│   │   ├── filters/
-│   │   ├── interceptors/
-│   │   ├── guards/
-│   │   └── logging/
+│   ├── queue/
+│   │   └── queue.module.ts
 │   │
 │   ├── prisma/
 │   │   └── prisma.service.ts
@@ -803,13 +785,18 @@ payment-order-processing-service/
 │   └── migrations/
 │
 ├── test/
-│   ├── unit/
+│   ├── app.e2e-spec.ts
 │   └── e2e/
+│       ├── orders.e2e-spec.ts
+│       ├── orders-concurrent.e2e-spec.ts
+│       ├── payment-flow.e2e-spec.ts
+│       └── payment-failure.e2e-spec.ts
 │
 ├── docker-compose.yml
 ├── Dockerfile
 ├── .env.example
 ├── package.json
+├── prisma.config.ts
 └── README.md
 ```
 
@@ -832,7 +819,7 @@ payment-order-processing-service/
 * [X] Idempotency-Key validation
 * [X] Request payload hashing
 * [X] Idempotency response replay
-* [ ] Concurrent request protection
+* [X] Concurrent request protection
 * [X] PostgreSQL transaction
 
 ### Outbox
