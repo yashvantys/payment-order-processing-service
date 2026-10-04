@@ -1,344 +1,514 @@
-Payment & Order Processing Service
-Event-driven order and payment processing service built with NestJS, TypeScript, PostgreSQL, Prisma, Redis, and BullMQ.
-The project focuses on reliability patterns commonly required in payment systems:
-- API idempotency
-- PostgreSQL transactional consistency
-- Transactional Outbox Pattern
-- At-least-once event delivery
-- Asynchronous payment processing
-- Idempotent payment workers
-- Retry and exponential backoff
-- Dead-letter queue (DLQ)
-- Payment-provider idempotency
-- HMAC webhook verification
-- Webhook event deduplication
-- Payment timeout handling
-- Manual reconciliation
-Status: Core order, payment, outbox, webhook, retry/DLQ, reconciliation, Docker, and E2E flows are implemented. Additional production hardening and AWS integration remain on the roadmap.
+# Payment & Order Processing Service
 
-Architecture
-                    POST /orders
-                         |
-                  Idempotency-Key
-                         |
-                         v
-              +---------------------+
-              | Idempotency Check    |
-              |                     |
-              | same payload        |
-              |   -> replay         |
-              | different payload   |
-              |   -> 422             |
-              +----------+----------+
-                         |
-                         v
-              +---------------------+
-              | PostgreSQL TX       |
-              |                     |
-              | 1. idempotency key  |
-              | 2. order PENDING    |
-              | 3. payment PENDING  |
-              | 4. outbox event     |
-              +----------+----------+
-                         |
-                         v
-                   202 Accepted
-                         |
-                         v
-                  Outbox Relay
-                         |
-                         v
-                BullMQ / Redis
-                         |
-                         v
-                 Payment Worker
-                         |
-                         v
-              Mock Payment Provider
-                   /           \
-                  /             \
-             Success           Timeout
-                |                 |
-                v                 v
-        SUCCESS / PAID       PROCESSING
-                                  |
-                                  v
-                           Reconciliation
-                                  |
-                                  v
-                             SUCCESS/PAID
+Event-driven order and payment processing service built with **NestJS**, **TypeScript**, **PostgreSQL**, **Prisma**, **Redis**, and **BullMQ**.
 
-Payment Provider
+The project focuses on reliability challenges commonly found in payment systems, including **API idempotency, transactional consistency, reliable event publishing, asynchronous payment processing, safe retries, dead-letter handling, webhook verification, and event deduplication**.
+
+> **Status:** In progress. See the [Roadmap](#roadmap) for implementation progress.
+
+---
+
+## Features
+
+Features are ticked off in the [Roadmap](#roadmap) as they are implemented.
+
+* **Idempotent order creation** — clients provide an `Idempotency-Key` header so retried requests do not create duplicate orders or payments.
+* **Transactional outbox** — order, payment, and outbox records are committed atomically in PostgreSQL.
+* **Asynchronous payment processing** — payment requests are published through the outbox and processed asynchronously by a worker.
+* **Safe retries** — payment processing uses timeouts, exponential backoff, retry limits, and a dead-letter queue (DLQ).
+* **Payment-provider idempotency** — the internal payment ID is used as the provider idempotency key.
+* **Verified webhooks** — HMAC signature verification protects webhook processing.
+* **Webhook deduplication** — provider event IDs are persisted to prevent duplicate processing.
+* **Payment state machine** — payment transitions are controlled and terminal states cannot move backwards.
+* **Reconciliation** — scheduled reconciliation can resolve payments that remain unresolved (`PROCESSING`) because the external outcome is unknown.
+* **Authentication** — JWT access and refresh tokens with role-based access control (RBAC).
+* **Automated testing** — unit and end-to-end tests cover important failure scenarios.
+
+---
+
+## Architecture
+
+```text
+POST /orders
+Idempotency-Key: <client-key>
+        |
+        v
++-------------------------+
+| Idempotency Check       |
+|                         |
+| Existing key?           |
+|  same payload -> replay |
+|  different payload     |
+|       -> 422            |
+|  new key -> continue    |
++------------+------------+
+             |
+             v
++--------------------------------------+
+| PostgreSQL Transaction               |
+|                                      |
+| 1. Insert idempotency key            |
+| 2. Create Order       -> PENDING     |
+| 3. Create Payment     -> PENDING     |
+| 4. Create Outbox Event               |
+|    PaymentRequested                  |
++-------------------+------------------+
+                    |
+                    v
+              202 Accepted
+                    |
+                    v
+              Outbox Relay
+                    |
+                    v
+          PaymentRequested Event
+                    |
+                    v
+             BullMQ / Redis
+                    |
+                    v
+             Payment Worker
+                    |
+                    v
+            Payment Gateway
+             /           \
+            /             \
+           v               v
+    Gateway Result       Webhook
+                           |
+                           v
+                    HMAC Verification
+                           |
+                           v
+                  Webhook Event Dedup
+                           |
+                           +-------------+
+                                         |
+                                         v
+                         +-------------------------------+
+                         | PostgreSQL Transaction        |
+                         |                               |
+                         | Payment -> SUCCESS / FAILED  |
+                         | Order   -> PAID / PAYMENT_FAILED |
+                         | Outbox  -> Completion Event  |
+                         +---------------+---------------+
+                                         |
+                                         v
+                                  Outbox Relay
+                                         |
+                                         v
+                         PaymentCompleted / PaymentFailed
+```
+
+### AWS Production Mapping
+
+The local implementation uses Redis and BullMQ for asynchronous processing. The architecture can be mapped to AWS services:
+
+```text
+NestJS API
+    |
+    +--> PostgreSQL / Amazon RDS
+    |
+    +--> Redis / ElastiCache
+    |
+    +--> SQS
+           |
+           v
+       Lambda / Worker
+           |
+           v
+    Payment Provider
+
+Outbox Events
+    |
+    v
+EventBridge / SQS
+```
+
+---
+
+## Design Decisions
+
+| Decision                               | Why                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------- |
+| Client-supplied idempotency key        | Prevents duplicate order creation when clients retry requests       |
+| Unique idempotency constraint          | Protects against concurrent duplicate requests                      |
+| Request payload hash                   | Detects reuse of the same key with a different request              |
+| Transactional outbox                   | Commits business state and event intent atomically                  |
+| At-least-once delivery                 | Allows reliable retry of failed event publication                   |
+| Idempotent worker                      | Safely handles duplicate queue delivery                             |
+| Payment ID as provider idempotency key | Prevents duplicate charges during payment retries                   |
+| Money stored as integer minor units    | Avoids floating-point precision problems                            |
+| Timeout keeps payment `PROCESSING`     | A timeout does not prove whether the provider processed the payment |
+| Webhook event ID deduplication         | Prevents duplicate webhook processing                               |
+| HMAC verification                      | Ensures webhook authenticity                                        |
+| `202 Accepted`                         | Payment processing happens asynchronously                           |
+
+---
+
+## Tech Stack
+
+### Backend
+
+* Node.js
+* NestJS
+* TypeScript
+
+### Database
+
+* PostgreSQL
+* Prisma ORM
+
+### Queue & Cache
+
+* Redis
+* BullMQ
+
+### Authentication & Security
+
+* JWT
+* Refresh tokens
+* RBAC
+* HMAC webhook verification
+* Request validation
+
+### Testing
+
+* Jest
+* Supertest
+
+### Development & DevOps
+
+* Docker
+* Docker Compose
+* GitHub Actions
+* Swagger / OpenAPI
+
+### AWS
+
+The architecture is designed to support:
+
+* Amazon SQS
+* AWS Lambda
+* Amazon EventBridge
+* Amazon RDS
+* Amazon ElastiCache
+* AWS Secrets Manager
+* Amazon CloudWatch
+
+---
+
+## Data Model
+
+The core service uses five tables.
+
+| Table              | Purpose                                        |
+| ------------------ | ---------------------------------------------- |
+| `orders`           | Order information, amount and lifecycle state  |
+| `payments`         | Payment information and provider status        |
+| `idempotency_keys` | Client key, request hash and stored response   |
+| `outbox_events`    | Events waiting to be published                 |
+| `webhook_events`   | Payment-provider events used for deduplication |
+
+### Relationship
+
+```text
+orders
+   |
+   | 1 : 1
+   v
+payments
+
+
+idempotency_keys
+       |
+       | protects API requests
+       v
+POST /orders
+
+
+outbox_events
        |
        v
-POST /webhooks/payments
+Message Broker / Queue
+
+
+webhook_events
        |
        v
-HMAC Verification
-       |
-       v
-Webhook Deduplication
-       |
-       v
-PostgreSQL Transaction
-       |
-       +--> Payment SUCCESS / FAILED
-       +--> Order PAID / PAYMENT_FAILED
-       +--> Completion Outbox Event
-AWS Production Mapping
-The current implementation uses Redis/BullMQ locally. The architecture can be mapped to AWS:
-Local	AWS-oriented deployment
-NestJS API	ECS/Fargate or Lambda
-PostgreSQL	Amazon RDS/Aurora PostgreSQL
-Redis	Amazon ElastiCache
-BullMQ	Amazon SQS
-Worker	Lambda or ECS worker
-Outbox events	SQS/EventBridge
-Secrets	AWS Secrets Manager
-Logs/Metrics	CloudWatch
+Payment Provider Webhooks
+```
 
+---
 
-AWS integration is planned; the current application is not yet an AWS production deployment.
-Core Features
-Implemented
-- Idempotent order creation using Idempotency-Key
-- Request payload hashing to reject key reuse with a different payload
-- Transactional order creation for order, payment, idempotency key, and outbox event
-- Transactional Outbox Pattern
-- Outbox relay with retry handling
-- Asynchronous payment processing through BullMQ/Redis
-- Payment-provider idempotency using the internal payment ID
-- Payment failure handling
-- Retry and exponential backoff
-- Payment DLQ handling
-- HMAC webhook verification
-- Webhook event deduplication
-- Terminal-state protection for payment updates
-- Manual payment reconciliation
-- Docker Compose development environment
-- Vitest + Supertest E2E tests
-Planned
-- Concurrent idempotency-request test/hardening
-- Concurrent webhook processing hardening
-- Unit/integration test suite
-- GitHub Actions CI
-- Swagger/OpenAPI
-- Scheduled reconciliation
-- Refund workflow
-- AWS deployment
-- Observability and distributed tracing
-Design Decisions
-Decision	Why
-Client-supplied idempotency key	Prevents duplicate order creation during client retries
-Unique (user_id, key) constraint	Protects the idempotency record from duplicates
-Request payload hash	Detects reuse of the same key with a different request
-PostgreSQL transaction	Keeps order/payment/idempotency/outbox writes consistent
-Transactional Outbox	Prevents losing an event after a successful DB transaction
-At-least-once delivery	Allows reliable retry of event publication
-Idempotent payment worker	Safely handles duplicate queue delivery
-Payment ID as provider idempotency key	Prevents duplicate external charges
-Integer minor-unit amounts	Avoids floating-point money precision problems
-Timeout keeps payment PROCESSING	A timeout does not prove whether the provider processed the payment
-Webhook event ID uniqueness	Prevents duplicate webhook processing
-HMAC verification	Verifies webhook authenticity
-202 Accepted	Order creation returns before asynchronous payment processing completes
+## Order State Machine
 
-
-Data Model
-The service currently uses five core tables:
-Table	Purpose
-orders	Order information, amount, currency, and lifecycle state
-payments	Payment information and provider status
-idempotency_keys	Client key, request hash, and stored response
-outbox_events	Events waiting to be published
-webhook_events	Provider events used for deduplication
-
-
-Important Constraints
-- orders.order_number is unique.
-- payments.order_id is unique.
-- (user_id, idempotency_key) is unique.
-- (provider, provider_payment_id) is unique when the provider payment ID exists.
-- (provider, provider_event_id) is unique for webhook events.
-Order State
-             +---------+
-             | PENDING |
-             +----+----+
-                  |
-                  v
-       +---------------------+
-       | PAYMENT_PROCESSING  |
-       +----------+----------+
-                  |
-            +-----+-----+
-            |           |
-            v           v
-        +-------+   +----------------+
-        | PAID  |   | PAYMENT_FAILED |
-        +-------+   +----------------+
+```text
+                +-------------------+
+                |      PENDING      |
+                +---------+---------+
+                          |
+                          v
+                +-------------------+
+                | PAYMENT_PROCESSING|
+                +---------+---------+
+                          |
+                    +-----+-----+
+                    |           |
+                    v           v
+              +---------+   +---------------+
+              |  PAID   |   | PAYMENT_FAILED|
+              +---------+   +---------------+
 
 PENDING
    |
    v
 CANCELLED
-Payment State
-        +---------+
-        | PENDING |
-        +----+----+
-             |
-             v
-        +----------+
-        |PROCESSING|
-        +----+-----+
-             |
-        +----+----+
-        |         |
-        v         v
-    +--------+ +--------+
-    |SUCCESS | | FAILED |
-    +----+---+ +--------+
-         |
-         v
-    +----------+
-    | REFUNDED |
-    +----------+
-REFUNDED exists in the payment model for the future refund workflow. The refund API/workflow is not yet implemented.
-Terminal payment states are protected from invalid backward transitions.
-API
-Implemented Endpoints
-Method	Endpoint	Description
-POST	/orders	Create an order; requires Idempotency-Key
-POST	/outbox/publish	Publish pending outbox events
-POST	/webhooks/payments	Process payment-provider webhook
-POST	/payments/reconcile	Reconcile payments still in PROCESSING
+```
 
+---
 
-The exact health endpoint depends on the current application module configuration. Payment lookup/refund APIs and Swagger are planned rather than documented as implemented APIs.
+## Payment State Machine
 
-Create Order
-Request
+```text
+             +---------+
+             | PENDING |
+             +----+----+
+                  |
+                  v
+            +-----------+
+            | PROCESSING|
+            +-----+-----+
+                  |
+            +-----+-----+
+            |           |
+            v           v
+       +---------+   +---------+
+       | SUCCESS |   | FAILED  |
+       +---------+   +---------+
+           |
+           v
+       +---------+
+       | REFUNDED|
+       +---------+
+```
+
+Terminal states are not allowed to transition backwards.
+
+`REFUNDED` is planned. It arrives with the refund workflow (see the Roadmap).
+
+---
+
+## API
+
+| Method | Endpoint             | Description                                 |
+| ------ | -------------------- | ------------------------------------------- |
+| `POST` | `/orders`            | Create an order; requires `Idempotency-Key` |
+| `GET`  | `/orders/:id`        | Get order and payment status                |
+| `POST` | `/webhooks/payments` | Payment-provider webhook                    |
+| `GET`  | `/health`            | Health check                                |
+
+Future payment APIs:
+
+| Method | Endpoint               | Description    |
+| ------ | ---------------------- | -------------- |
+| `GET`  | `/payments/:id`        | Get payment    |
+| `POST` | `/payments/:id/refund` | Refund payment |
+
+---
+
+## Create Order
+
+### Request
+
+```bash
 curl -X POST http://localhost:3000/orders \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: order-001" \
+  -H "Idempotency-Key: 7c9e6679-7425-40de-944b-e07fc1f90ae7" \
   -d '{
     "amount": 49900,
     "currency": "INR",
-    "customerId": "550e8400-e29b-41d4-a716-446655440000"
+    "customerId": "cus_123"
   }'
-49900 represents ₹499.00 when INR amounts are stored in paise.
-Response
+```
+
+`49900` represents **₹499.00** when amounts are stored in INR minor units (paise).
+
+### Response
+
+```http
 HTTP/1.1 202 Accepted
+```
+
+```json
 {
   "orderId": "order-123",
   "paymentId": "payment-456",
   "status": "PENDING"
 }
-Idempotency
-The API supports safe retries through the Idempotency-Key header.
-Same key + same payload
-The second request replays the stored response instead of creating another order/payment.
+```
+
+Repeating the same request with the same `Idempotency-Key` returns the previously stored response instead of creating another order or payment.
+
+---
+
+## Idempotency
+
+The API supports safe retries using the `Idempotency-Key` header.
+
+### Same key + same payload
+
+```text
 Request 1
-   |
-   v
+    |
+    v
 Create Order
-   |
-   v
+    |
+    v
 Store Response
 
 Request 2
-   |
-   v
+    |
+    v
 Same Idempotency-Key
-   |
-   v
+    |
+    v
 Return Stored Response
-Same key + different payload
-Request 1:
-key    = order-001
+```
+
+### Same key + different payload
+
+```text
+Request 1
 amount = 49900
+key    = abc-123
 
-Request 2:
-key    = order-001
+Request 2
 amount = 99900
+key    = abc-123
 
-        |
-        v
+             |
+             v
 
-422 Unprocessable Entity
-The service stores a SHA-256 request hash to detect this condition.
-Concurrent same-key behavior is protected by the database uniqueness constraint, but dedicated concurrent-request E2E coverage remains on the roadmap.
+        422 Unprocessable Entity
+```
 
-Transactional Outbox
-Order creation performs these writes inside one PostgreSQL transaction:
+The service stores a request hash to detect this situation.
+
+### Same key, concurrent requests
+
+The idempotency key is inserted inside the order transaction, protected by a unique constraint. If two identical requests arrive together, the second waits for the first transaction to finish and then receives the stored response. If the wait times out, it returns `409 Conflict` and the client retries later.
+
+---
+
+## Transactional Outbox
+
+Order creation uses a single PostgreSQL transaction:
+
+```text
 BEGIN
 
 INSERT idempotency_keys
+
 INSERT orders
+
 INSERT payments
+
 INSERT outbox_events
 
 COMMIT
-The application does not require successful queue publication before committing the database transaction.
-The outbox relay later publishes pending events.
+```
+
+The application does **not** depend on publishing the message before committing the transaction.
+
+The outbox relay later publishes the event.
+
+This protects against:
+
+```text
 Database transaction succeeds
-           |
-           v
+          |
+          v
 Message publishing fails
-           |
-           v
+          |
+          v
 Event remains in outbox
-           |
-           v
+          |
+          v
 Relay retries
-This provides reliable event publication without coupling the business transaction directly to the message broker.
-Payment Worker
-The worker consumes PaymentRequested events.
+```
+
+---
+
+## Payment Worker
+
+The worker consumes `PaymentRequested` events.
+
+```text
 PaymentRequested
        |
        v
-Load Payment
+Check Payment Status
        |
-       +---- terminal SUCCESS/FAILED
-       |             |
-       |             v
-       |            ACK
+       +---- SUCCESS/FAILED
+       |          |
+       |          v
+       |       ACK message
        |
        v
 Mark Payment PROCESSING
        |
        v
-Call Payment Provider
+Call Payment Gateway
        |
-       +---- Success ----> SUCCESS / PAID
+       +---- Success ----> SUCCESS
        |
        +---- Failure ----> Retry
        |
-       +---- Timeout ----> PROCESSING
-The payment provider mock uses the internal payment ID to create a stable provider payment ID.
-Mock Failure Scenarios
-- amount = 999999 → simulated provider failure
-- amount = 888888 → simulated provider timeout
-- Other positive amounts → successful mock payment
-A timeout intentionally leaves the payment in PROCESSING because the external result is unknown. Reconciliation can later query the provider and resolve it.
-Retry & Dead Letter Queue
-Payment jobs are configured with retry/backoff behavior.
+       +---- Timeout ----> stays PROCESSING / Retry
+```
+
+The worker uses the internal payment ID as the payment-provider idempotency key.
+
+---
+
+## Retry & Dead Letter Queue
+
+Transient failures use exponential backoff.
+
+```text
 Attempt 1
    |
    v
 Failure
    |
    v
-Retry with backoff
+Retry
+   |
+   v
+Attempt 2
+   |
+   v
+Retry
    |
    v
 Attempt N
    |
    v
 DLQ
-After the configured attempts are exhausted, the worker records the payment failure and places the failed job in the payment DLQ with diagnostic information.
-The current E2E suite verifies the payment-failure path through retry and DLQ handling.
-Webhook Processing
-Payment-provider webhooks follow this flow:
+```
+
+The exact retry count and backoff values are configurable.
+
+Non-retryable errors are not repeatedly retried.
+
+---
+
+## Webhook Processing
+
+Payment providers can send asynchronous payment updates.
+
+```text
 POST /webhooks/payments
           |
           v
@@ -352,209 +522,275 @@ Check Provider Event ID
           |
      +----+----+
      |         |
- Duplicate    New
+ Already     New
      |         |
      v         v
-   200 OK   PostgreSQL TX
-                |
-                v
-       Insert Webhook Event
-                |
-                v
-       Update Payment/Order
-                |
-                v
-          Outbox Event
+  200 OK   PostgreSQL Transaction
+               |
+               v
+      Insert Event ID (unique)
+      + Process Payment
+               |
+        +------+------+
+        |             |
+        v             v
+     Payment        Order
+        |
+        v
+    Outbox Event
+```
+
 Webhook events are deduplicated using:
+
+```text
 UNIQUE(provider, provider_event_id)
-The webhook processing transaction records the event and updates the related payment/order state together.
-Reconciliation
-The service exposes a manual reconciliation endpoint for payments that remain PROCESSING.
+```
+
+The event ID insert and the payment, order and outbox updates happen in **one transaction**. A crash cannot leave an event recorded but never applied. A unique violation means the event is a duplicate, so the endpoint returns `200 OK`.
+
+---
+
+## Reconciliation
+
+A scheduled reconciliation process handles payments that remain `PROCESSING` when the external payment result is unknown.
+
+Example:
+
+```text
 Payment
-   |
-   +-- PROCESSING
+  |
+  +-- PROCESSING for too long
           |
           v
-POST /payments/reconcile
+Reconciliation Job
           |
           v
 Query Payment Provider
           |
-       +--+--+
-       |     |
-       v     v
-   SUCCESS  UNKNOWN/other
-       |
-       v
-Update Payment + Order
-       |
-       v
-Create Completion Outbox Event
-The timeout scenario is especially important because a provider timeout does not prove that the external payment failed.
-Scheduled reconciliation is planned. The current implementation provides a manual reconciliation endpoint/service.
+      +---+---+
+      |       |
+      v       v
+ SUCCESS   FAILED
+      |       |
+      v       v
+ Update    Update
+ Payment   Payment
+```
 
-Security
-Currently implemented security/reliability controls include:
-- Request validation using NestJS ValidationPipe
-- Idempotency-Key protection
-- PostgreSQL uniqueness constraints
-- HMAC webhook signature verification
-- Webhook event deduplication
-- Centralized exception handling
-- Environment-based configuration
-JWT authentication, refresh tokens, and RBAC are planned, not currently implemented.
-Never commit real secrets to the repository.
-Tech Stack
-Backend
-- Node.js 24
-- NestJS
-- TypeScript
-Database
-- PostgreSQL 17
-- Prisma 7
-- @prisma/adapter-pg
-- pg
-Queue
-- Redis 7
-- BullMQ
-- @nestjs/bullmq
-- ioredis
-Testing
-- Vitest
-- Supertest
-DevOps
-- Docker
-- Docker Compose
-Planned
-- GitHub Actions
-- Swagger/OpenAPI
-- AWS SQS/Lambda
-- RDS/Aurora
-- ElastiCache
-- EventBridge
-- CloudWatch
-- Secrets Manager
-Getting Started
-Prerequisites
-- Node.js 24+
-- npm
-- Docker
-- Docker Compose
-Clone
+This is particularly important for gateway timeout scenarios where the request outcome is unknown.
+
+---
+
+## Security
+
+The service includes:
+
+* JWT authentication
+* Refresh tokens
+* Role-based authorization
+* Request validation
+* HMAC webhook signature verification
+* Webhook event deduplication
+* Idempotency protection
+* Database constraints
+* Secure environment configuration
+* Centralized exception handling
+
+Secrets should not be committed to the repository.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+* Node.js 20+
+* Docker
+* Docker Compose
+* npm
+
+### Clone
+
+```bash
 git clone https://github.com/<your-username>/payment-order-processing-service.git
+
 cd payment-order-processing-service
-Install dependencies
-npm install
-Environment
-For local execution, configure:
+```
+
+### Environment
+
+```bash
+cp .env.example .env
+```
+
+Example:
+
+```env
 PORT=3000
 
-DATABASE_URL=postgresql://postgres:admin@localhost:5432/payment_order_db
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/payment_service
 
-REDIS_HOST=localhost
-REDIS_PORT=6379
+REDIS_URL=redis://localhost:6379
 
-WEBHOOK_SECRET=super-secret-webhook-key
-The Docker Compose API container uses the Docker service names for PostgreSQL and Redis automatically.
-Start infrastructure
-docker compose up -d postgres redis
-Run migrations
-For an existing migration history:
-npx prisma migrate deploy
-For local development where a new migration is required:
-npx prisma migrate dev
-Start application
+JWT_SECRET=change-me
+
+WEBHOOK_SECRET=change-me
+
+PAYMENT_GATEWAY_URL=http://localhost:4000
+```
+
+### Start infrastructure
+
+```bash
+docker compose up -d
+```
+
+### Install dependencies
+
+```bash
+npm install
+```
+
+### Run database migrations
+
+```bash
+npm run migrate
+```
+
+### Start application
+
+```bash
 npm run start:dev
+```
+
 Application:
+
+```text
 http://localhost:3000
-Docker
-Build and start the complete stack:
-docker compose up -d --build
-Check services:
-docker compose ps
-View API logs:
-docker compose logs -f api
-Stop services:
-docker compose down
-docker compose down -v removes the PostgreSQL and Redis volumes and therefore deletes local persisted data.
+```
 
-Environment Variables
-Variable	Description
-PORT	Application port
-DATABASE_URL	PostgreSQL connection string
-REDIS_HOST	Redis hostname
-REDIS_PORT	Redis port
-WEBHOOK_SECRET	HMAC webhook signing secret
+Swagger:
 
+```text
+http://localhost:3000/docs
+```
 
-Testing
-E2E Tests
-npm run test:e2e
-Current E2E coverage includes:
-- Application bootstrap
-- Order creation
-- Idempotency replay
-- Same key with different payload
-- Successful payment flow
-- Payment failure/retry/DLQ flow
-The latest E2E run has 4 test files and 7 tests passing.
-Unit Test Command
+---
+
+## Environment Variables
+
+| Variable              | Description                  |
+| --------------------- | ---------------------------- |
+| `PORT`                | Application port             |
+| `DATABASE_URL`        | PostgreSQL connection string |
+| `REDIS_URL`           | Redis connection string      |
+| `JWT_SECRET`          | JWT signing secret           |
+| `WEBHOOK_SECRET`      | HMAC webhook secret          |
+| `PAYMENT_GATEWAY_URL` | Payment gateway base URL     |
+
+---
+
+## Testing
+
+### Unit Tests
+
+```bash
 npm run test
-The project is configured with Vitest. A broader unit/integration suite is still planned.
-Coverage
+```
+
+### E2E Tests
+
+```bash
+npm run test:e2e
+```
+
+### Coverage
+
+```bash
 npm run test:cov
-Lint
+```
+
+### Lint
+
+```bash
 npm run lint
-Key Verified Scenarios
-Scenario	Status
-Create order	✅
-Missing Idempotency-Key rejected	✅
-Same key + same payload replay	✅
-Same key + different payload → 422	✅
-Transactional outbox creation	✅
-Successful asynchronous payment	✅
-Payment failure	✅
-Payment retry	✅
-Payment DLQ	✅
-Invalid webhook signature → 401	✅
-Valid payment webhook	✅
-Duplicate webhook handling	✅
-Late terminal webhook protection	✅
-Payment timeout → PROCESSING	✅
-Manual reconciliation	✅
-Concurrent same-key E2E test	⏳
-Concurrent webhook race E2E test	⏳
-Unit/integration test suite	⏳
-Scheduled reconciliation	⏳
+```
 
+---
 
-Project Structure
+## Key Test Scenarios
+
+The test suite will cover:
+
+* Successful order creation
+* Duplicate order with the same idempotency key
+* Same key with a different payload
+* Concurrent requests with the same idempotency key
+* Transaction rollback
+* Outbox event creation
+* Outbox relay retry
+* Successful payment
+* Payment failure
+* Gateway timeout
+* Payment retry
+* DLQ handling
+* Duplicate queue delivery
+* Duplicate webhook event
+* Invalid webhook signature
+* Invalid webhook payload
+* Payment reconciliation
+* Authentication failures
+* Authorization failures
+
+---
+
+## Project Structure
+
+```text
 payment-order-processing-service/
 │
 ├── src/
 │   ├── orders/
-│   │   ├── dto/
 │   │   ├── orders.controller.ts
-│   │   └── orders.service.ts
+│   │   ├── orders.service.ts
+│   │   ├── orders.repository.ts
+│   │   └── dto/
 │   │
 │   ├── payments/
-│   │   ├── payment-provider.service.ts
-│   │   ├── payments.processor.ts
-│   │   └── payments.service.ts
+│   │   ├── payments.service.ts
+│   │   ├── payment.gateway.ts
+│   │   ├── payment-state-machine.ts
+│   │   └── dto/
+│   │
+│   ├── idempotency/
+│   │   ├── idempotency.service.ts
+│   │   └── idempotency.repository.ts
 │   │
 │   ├── outbox/
-│   │   ├── outbox.controller.ts
+│   │   ├── outbox.service.ts
 │   │   └── outbox.relay.ts
+│   │
+│   ├── workers/
+│   │   └── payment.worker.ts
 │   │
 │   ├── webhooks/
 │   │   ├── webhook.controller.ts
-│   │   └── webhook.service.ts
+│   │   ├── webhook.service.ts
+│   │   └── hmac.guard.ts
+│   │
+│   ├── auth/
+│   │   ├── auth.service.ts
+│   │   ├── jwt.strategy.ts
+│   │   └── guards/
 │   │
 │   ├── reconciliation/
 │   │   └── reconciliation.service.ts
 │   │
-│   ├── queue/
-│   │   └── queue.module.ts
+│   ├── common/
+│   │   ├── filters/
+│   │   ├── interceptors/
+│   │   ├── guards/
+│   │   └── logging/
 │   │
 │   ├── prisma/
 │   │   └── prisma.service.ts
@@ -567,107 +803,140 @@ payment-order-processing-service/
 │   └── migrations/
 │
 ├── test/
-│   ├── app.e2e-spec.ts
+│   ├── unit/
 │   └── e2e/
 │
 ├── docker-compose.yml
 ├── Dockerfile
-├── prisma.config.ts
+├── .env.example
 ├── package.json
-├── vitest.config.e2e.ts
 └── README.md
-Roadmap
-Core
-- [x] Database schema and migrations
-- [x] orders
-- [x] payments
-- [x] idempotency_keys
-- [x] outbox_events
-- [x] webhook_events
-Order & Idempotency
-- [x] POST /orders
-- [x] Idempotency-Key validation
-- [x] Request payload hashing
-- [x] Idempotency response replay
-- [x] PostgreSQL transaction
-- [ ] Dedicated concurrent same-key E2E test
-Outbox
-- [x] Outbox event creation
-- [x] Outbox relay
-- [x] At-least-once event publishing
-- [x] Failed event retry
-Payment Processing
-- [x] Payment provider interface
-- [x] Mock payment provider
-- [x] Payment worker
-- [x] Payment state/terminal-state protection
-- [x] Gateway timeout handling
-- [x] Exponential backoff
-- [x] DLQ handling
-Webhooks
-- [x] Webhook endpoint
-- [x] HMAC signature verification
-- [x] Event ID deduplication
-- [x] Payment status update
-- [x] Completion outbox events
-- [ ] Concurrent webhook race E2E test
-Reliability
-- [x] Manual reconciliation endpoint/service
-- [x] Idempotent payment consumer behavior
-- [ ] Scheduled reconciliation
-- [ ] Broader duplicate-message tests
-- [ ] Concurrent processing protection
-- [ ] Broader failure-recovery test suite
-Testing & DevOps
-- [x] Vitest E2E tests
-- [x] Supertest
-- [x] Docker Compose
-- [ ] Unit tests
-- [ ] Integration tests
-- [ ] GitHub Actions CI
-- [ ] Swagger/OpenAPI
-AWS
-- [ ] AWS SQS integration
-- [ ] Lambda payment worker
-- [ ] RDS/Aurora PostgreSQL
-- [ ] ElastiCache Redis
-- [ ] EventBridge
-- [ ] CloudWatch monitoring
-- [ ] Secrets Manager
-- [ ] Production deployment
-Future Enhancements
-- [ ] Refund workflow
-- [ ] Payment reconciliation dashboard
-- [ ] Circuit breaker
-- [ ] Distributed tracing
-- [ ] OpenTelemetry
-- [ ] Datadog integration
-- [ ] Kafka event streaming
-- [ ] JWT authentication
-- [ ] RBAC
-What This Project Demonstrates
-This project is designed to demonstrate senior-level backend and distributed-systems engineering rather than basic CRUD development.
-Key concepts:
-- NestJS modular architecture
-- TypeScript
-- PostgreSQL transactions
-- Prisma
-- API idempotency
-- Transactional Outbox Pattern
-- At-least-once delivery
-- Idempotent consumers
-- Asynchronous processing
-- Retry and DLQ strategies
-- Payment-provider idempotency
-- Webhook security
-- Webhook deduplication
-- Payment state/terminal-state protection
-- Reconciliation
-- Distributed-system failure handling
-- Docker
-- Automated E2E testing
-- AWS-oriented architecture
-Author
-Yashvant Yadav
-Senior Backend Engineer / Tech Lead
-Node.js | TypeScript | AWS | GraphQL | Microservices | Serverless
+```
+
+---
+
+## Roadmap
+
+### Core
+
+* [X] Database schema and migrations
+* [X] `orders` table
+* [X] `payments` table
+* [X] `idempotency_keys` table
+* [X] `outbox_events` table
+* [X] `webhook_events` table
+
+### Order & Idempotency
+
+* [X] `POST /orders`
+* [X] Idempotency-Key validation
+* [X] Request payload hashing
+* [X] Idempotency response replay
+* [ ] Concurrent request protection
+* [X] PostgreSQL transaction
+
+### Outbox
+
+* [X] Outbox event creation
+* [X] Outbox relay
+* [X] At-least-once event publishing
+* [X] Failed event retry
+
+### Payment Processing
+
+* [X] Payment gateway interface
+* [X] Mock payment gateway
+* [X] Payment worker
+* [X] Payment state machine
+* [X] Gateway timeout handling
+* [X] Exponential backoff
+* [X] DLQ handling
+
+### Webhooks
+
+* [X] Webhook endpoint
+* [X] HMAC signature verification
+* [X] Event ID deduplication
+* [X] Payment status update
+* [X] Completion outbox events
+
+### Reliability
+
+* [X] Manual reconciliation endpoint and service
+* [X] Duplicate webhook handling / idempotent payment consumer
+* [ ] Reconciliation job
+* [ ] Duplicate message handling
+* [ ] Concurrent processing protection
+* [ ] Failure recovery tests
+
+### Testing & DevOps
+
+* [ ] Unit tests
+* [ ] Integration tests
+* [X] E2E tests
+* [X] Docker Compose
+* [ ] GitHub Actions CI
+* [ ] Swagger/OpenAPI
+
+### AWS
+
+* [ ] AWS SQS integration
+* [ ] Lambda payment worker
+* [ ] RDS PostgreSQL
+* [ ] ElastiCache Redis
+* [ ] EventBridge
+* [ ] CloudWatch monitoring
+* [ ] Secrets Manager
+* [ ] Production deployment
+
+### Future Enhancements
+
+* [ ] Refund workflow
+* [ ] Payment reconciliation dashboard
+* [ ] Circuit breaker
+* [ ] Distributed tracing
+* [ ] OpenTelemetry
+* [ ] Datadog integration
+* [ ] Kafka event streaming
+
+---
+
+## What This Project Will Demonstrate
+
+This project is designed to demonstrate practical senior-level backend engineering rather than basic CRUD development.
+
+Key concepts include:
+
+* **NestJS modular architecture**
+* **TypeScript**
+* **PostgreSQL transactions**
+* **Prisma**
+* **API idempotency**
+* **Transactional Outbox Pattern**
+* **At-least-once event delivery**
+* **Idempotent consumers**
+* **Asynchronous processing**
+* **Retry and DLQ strategies**
+* **Payment-provider idempotency**
+* **Webhook security**
+* **Webhook deduplication**
+* **State-machine design**
+* **Reconciliation**
+* **Distributed-system failure handling**
+* **JWT/RBAC**
+* **Automated testing**
+* **Docker**
+
+---
+
+## Author
+
+**Yashvant Yadav**
+
+Senior Backend Engineer
+
++91-9601062671
+yashvanty@gmail.com
+
+**Node.js | TypeScript | AWS | GraphQL | Microservices | Serverless**
+
