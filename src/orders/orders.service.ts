@@ -157,6 +157,29 @@ export class OrdersService {
         if (!order) {
             throw new NotFoundException('Order not found');
         }
-        return order;
+        return {
+            id: order.id,
+            orderNumber: order.orderNumber,
+            customerId: order.customerId,
+            amount: order.amount.toString(),
+            currency: order.currency,
+            status: order.status,
+            createdAt: order.createdAt,
+            updatedAt: order.updatedAt,
+            payment: order.payment
+                ? {
+                    id: order.payment.id,
+                    orderId: order.payment.orderId,
+                    amount: order.payment.amount.toString(),
+                    currency: order.payment.currency,
+                    status: order.payment.status,
+                    provider: order.payment.provider,
+                    providerPaymentId: order.payment.providerPaymentId,
+                    failureReason: order.payment.failureReason,
+                    createdAt: order.payment.createdAt,
+                    updatedAt: order.payment.updatedAt,
+                }
+                : null,
+        };
     }
 }

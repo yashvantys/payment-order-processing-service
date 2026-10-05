@@ -115,4 +115,43 @@ describe('Orders API (e2e)', () => {
 
     });
 
+    it('should get an existing order by id', async () => {
+        const response = await request(app.getHttpServer())
+            .post('/orders')
+            .set('Idempotency-Key', `get-order-${Date.now()}`)
+            .send({
+                customerId,
+                amount: 49900,
+                currency: 'INR',
+            })
+            .expect(202);
+        const orderId = response.body.orderId;
+        const getResponse = await request(app.getHttpServer())
+            .get(`/orders/${orderId}`)
+            .expect(200);
+        expect(getResponse.body).toEqual(
+            expect.objectContaining({
+                id: orderId,
+                customerId,
+                amount: '49900',
+                currency: 'INR',
+                status: 'PENDING',
+            }),
+        );
+        expect(getResponse.body.payment).toEqual(
+            expect.objectContaining({
+                orderId,
+                status: 'PENDING',
+            }),
+        );
+    });
+
+    it('should return 404 when order does not exist', async () => {
+        const unknownOrderId = '550e8400-e29b-41d4-a716-446655440099';
+        const response = await request(app.getHttpServer())
+            .get(`/orders/${unknownOrderId}`)
+            .expect(404);
+        expect(response.body.message).toBe('Order not found');
+    });
+
 });
